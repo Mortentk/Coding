@@ -1,0 +1,305 @@
+---
+title: "Prediction model of house prices"
+author: "Flow ID: 5"
+date: "12/08/2019"
+ 
+
+    
+---
+
+```{r message=FALSE}
+library(DataExplorer) 
+library(textir) ## needed to standardize the data
+library(class) ## needed for knn
+library(ggplot2) # visualization
+library(ggthemes) # visualization
+library(scales) # visualization
+library(dplyr) # data manipulation
+library(randomForest) # random forest
+library(corrplot) # correlation
+library(tidyverse)
+library(caret)
+library(mgcv)
+library(glmnet)
+library(rpart)
+library(gam)
+library(lmtest)
+library(Metrics)
+
+```
+
+
+
+
+# Explore the  Dataset ----------------------------------------------------
+```{r}
+Data <- read.csv("pricehouse.csv") #importing pricehouse csv.
+str(Data) #To learn about the amount of observations and variables and what kind of variables the dataset contains. 
+summary(Data)#Summary provides a useful description of the variables. It indicates if the data contains any missing values. 
+#The first five variables all contain missing values. Secondly, it can give an early indication of outliers. 
+#In this case, we see the variable Rainfall has atleast one outlier, because the minimum value is -110
+#which in reality is impossible and needs to be solved.
+```
+```{r}
+#The next part is a plot of all the variables to get an idea of the distribution in terms of skewness. 
+Data %>%
+  keep(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) +
+  facet_wrap(~ key, scales = "free") +
+  geom_histogram()
+
+#First of all the histogram shows the majority of the variables have potential outliers.
+#Secondly, at least three of the variables are nonsymetric distributed due to outliers and should be symetric.
+#It will be solved later on and tested again.
+```
+
+#Removal of Outliers.
+
+```{r}
+{
+    #The following code is used to find outliers, convert each outlier into a vector and then delete each observation which contain an outlier
+    #We consider a value for an outlier, if the value is not within the first and third quantile.
+    #A boxplot is used and will print each outlier 
+ 
+    boxplot(Data$Taxi_dist, xlab="Taxi_dist")$out
+    #outliers: 1200 15522 20662 15321   604 16233 16850  1241   146 15082
+    outliers.Taxi_dist <- boxplot(Data$Taxi_dist, plot=FALSE)$out #Assiging each outlier in Data to outliers.Taxi_dist
+    Data[which(Data$Taxi_dist %in% outliers.Taxi_dist),] #Finding outliers in the dataset.
+    Data <- Data[-which(Data$Taxi_dist %in% outliers.Taxi_dist),] #removing the outliers in the main dataset.
+    boxplot(Data$Taxi_dist, xlab="Taxi_dist")
+    
+    #Same procedure for each variable.
+    boxplot(Data$Market_dist, xlab="Market_dist")$out
+    outliers.Market_dist <- boxplot(Data$Market_dist, plot=FALSE)$out
+    Data[which(Data$Market_dist %in% outliers.Market_dist),]
+    Data <- Data[-which(Data$Market_dist %in% outliers.Market_dist),]
+    boxplot(Data$Market_dist, xlab="Market_dist")
+    
+    boxplot(Data$Builtup_area, xlab="Builtup_area")$out
+    outliers.Builtup_area <- boxplot(Data$Builtup_area, plot=FALSE)$out
+    Data[which(Data$Builtup_area %in% outliers.Builtup_area),]
+    Data <- Data[-which(Data$Builtup_area %in% outliers.Builtup_area),]
+    boxplot(Data$Builtup_area, xlab="Builtup_area")
+    
+    boxplot(Data$Price_house, xlab="Price_house")$out
+    outliers.Price_house <- boxplot(Data$Price_house, plot=FALSE)$out
+    Data[which(Data$Price_house %in% outliers.Price_house),]
+    Data <- Data[-which(Data$Price_house %in% outliers.Price_house),]
+    boxplot(Data$Price_house, xlab="Price_house")
+    
+    boxplot(Data$Rainfall, xlab="Price_house")$out
+    outliers.Rainfall <- boxplot(Data$Rainfall, plot=FALSE)$out
+    Data[which(Data$Rainfall %in% outliers.Rainfall),]
+    Data <- Data[-which(Data$Rainfall %in% outliers.Rainfall),]
+    boxplot(Data$Rainfall, xlab="Price_house")
+}
+```
+
+A box plot of each variable was made. One before and after the outliers were removed.
+
+#Removal of NAs
+
+```{r}
+#Before further exploration is made, the missing values need to be taken care of.
+#Each missing value will be replaced by applying a mean value.
+#The following code will solve the missing values for each variable.
+{
+    Data$Taxi_dist[is.na(Data$Taxi_dist)]=mean(Data$Taxi_dist,na.rm=T)
+    Data$Market_dist[is.na(Data$Market_dist)]=round(mean(Data$Market_dist,na.rm=T),0)
+    Data$Hospital_dist[is.na(Data$Hospital_dist)]=round(mean(Data$Hospital_dist,na.rm=T),0)
+    Data$Carpet_area[is.na(Data$Carpet_area)]=round(mean(Data$Carpet_area,na.rm=T),0)
+    Data$Builtup_area[is.na(Data$Builtup_area)]=round(mean(Data$Builtup_area,na.rm=T),0)
+    apply(Data,2,function(x)sum(is.na(x))) #Used to check for missing values
+}
+```
+
+
+#Correlation test
+
+```{r}
+#The next part is to check the data for potential correlation issues. 
+#To do that, each variable which has to be checked needs to be made numeric,
+{
+    Data$Parking_type <- as.numeric(Data$Parking_type) #Changing Parking_type from a factor to numeric.
+    Data$City_type <- as.numeric(Data$City_type) # -.-
+    Data$Rainfall <- as.numeric(Data$Rainfall) # -.-
+    Data$Price_house <- as.numeric(Data$Price_house) # -.-
+}
+#Correlation test
+{
+    correlationMatrix <- cor(Data[,1:9])
+    highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.5)
+    print(highlyCorrelated)
+}
+
+
+#A userfriendly heatmap to indicate correlations.
+corrplot(cor(Data), method = "number", type = "upper", diag = FALSE)
+#As mentioned earlier it is perfect normal that the price of a house and house price is correlated.
+```
+
+Taxi_dist and Hospital_Dist have a correlation of 0.78 but we will let be for now. A feature selection process will be conducted later on.
+Carpet-area and Builtup-area seems to suffer from multicollinearity. Carpet_area is a part of the total Builup_area. Carpet area will be removed from the dataset.
+Rainfall is not relevant and will also be deleted. There is no point in keeping unrelevant variables in the dataset. 
+
+```{r}
+Data <- Data[ -c(4,8) ] #Removal of Carpet_area and Rainfall
+#Data$Parking_type <- as.factor(Data$Parking_type) #Changing Parking_type from a numeric to factor
+#Data$City_type <- as.factor(Data$City_type)#Changing Parking_type from a numeric to factor
+```
+
+
+
+# Test and Training set
+
+```{r}
+set.seed(123)#This seed will be used continously throughout the project.
+#Partitioning of the the original dataset into test and train.
+inTrain <- createDataPartition(y = Data$Price_house, p = 0.75, list = FALSE)
+training <- Data[inTrain,]
+testing <- Data[-inTrain,]
+```
+
+#Feature selection using regsubsets() 
+
+```{r}
+library(leaps) 
+#reqsubsets is used to perform a selection of either forward or backward selection of features.
+#In this case, only forward stepwise selection is being used.
+reg.fit = regsubsets(training$Price_house ~ ., data = training, method = "forward")  
+reg.summary = summary(reg.fit)
+reg.summary
+summary(reg.fit)
+
+#Preprocess of finding the most relevant variables. An adjusted r-square(adjr2) is used. The adjr2 is useful to see how each model fits to the dataset.
+reg.summary$adjr2
+#Plot used to see the optimal amount of variables which should be included in the later models.
+plot(reg.summary$adjr2, xlab = "Number of Variables", ylab = "Adjusted R-square", type = "p", ylim = c(0.1, 1), main = " Adjusted R-square")
+max.adjr2 = max(reg.summary$adjr2) #maximum adjusted r-square
+std.adjr2 = sd(reg.summary$adjr2) #standard deviation
+abline(h = max.adjr2 + 0.2 * std.adjr2, col = "red", lty = 2)#used to find the score which is within 0.2 std. deviations away
+abline(h = max.adjr2 - 0.2 * std.adjr2, col = "red", lty = 2)
+
+```
+
+The optimal amount of variables are 3 to 4 but we decided to go with 3 in the case. 
+
+```{r}
+
+#Used to find the most important variables to predict the dependt variable.
+reg.fit = regsubsets(training$Price_house ~ ., data = training, method = "forward")
+coefi = coef(reg.fit, id=3) #The number three was found in the previous part.
+names(coefi) #List the three variables, which we will used in the different models.
+
+```
+
+The most important variables are  "Hospital_dist" "Builtup_area"  "City_type"  
+
+
+#Training linear model
+
+```{r}
+set.seed(123) 
+linear.model<-lm(Price_house ~  Hospital_dist + Builtup_area + City_type, data = training) #Training a linear model with the three variables chosen for this project.
+summary(linear.model)
+summary.aov(linear.model)
+AIC(linear.model) #Model criteria to estimate the performance.
+
+par(mfrow = c(2, 2))
+plot(linear.model) 
+#Test for heteroskedasity, p-value = 0.5
+lmtest::bptest(linear.model)
+```
+
+hetereoskedasity is absent, p-value of 0.5903
+AIC = 21139.16
+
+#Training Generalized Linaer Model
+```{r}
+#I wont explain each model. All the models are almost similar in terms of the coding construction.
+set.seed(123)
+glm.model<-glm(Price_house ~  Hospital_dist + Builtup_area + City_type, data = training)
+summary(glm.model)
+AIC(glm.model)
+
+par(mfrow = c(2, 2))
+plot(glm.model) 
+lmtest::bptest(glm.model)
+```
+
+hetereoskedasity is absent, p-value of 0.5903
+AIC = 21139.16
+
+#Training Generalized Additive Model
+
+```{r}
+#Data$City_type <- as.factor(Data$City_type)#Changing Parking_type from a numeric to factor
+
+set.seed(123)
+#The Generalized Additive Model uses a smoothing mechanism. The smoothing has been added to each variable except City_type.
+gam.model <- mgcv::gam(Price_house ~  s(Hospital_dist) + s(Builtup_area) + City_type,data = training) 
+
+summary(gam.model) 
+par(mfrow = c(2, 2))
+plot(gam.model, se = T, col = "red", scheme=1,unconditional = TRUE, residuals = TRUE) 
+AIC(gam.model)
+lmtest::bptest(gam.model)
+```
+hetereoskedasity is absent, p-value of 0.5903
+AIC = 21116.44
+
+```{r}
+#Used to evaluate the model in terms of reponse vs fitted values etc.
+gam.check(gam.model) 
+```
+
+```{r}
+
+set.seed(123)
+#Modifications are made to each variable, which are explained in the report. City_type is now smoothed as well.
+gam.model.modified <- mgcv::gam(Price_house ~  s(Hospital_dist, bs="ad",k= -1) + s(Builtup_area, bs="ad",k= -1) + s(City_type, bs="fs",k=3), data = training) 
+gam.check(gam.model.modified)
+summary(gam.model.modified) 
+par(mfrow = c(2, 2))
+AIC(gam.model.modified) 
+```
+
+AIC = 21113.83
+
+
+```{r}
+#Comparing each models AIC.
+AIC(linear.model, glm.model, gam.model, gam.model.modified)
+```
+
+The following model has the best quality:gam.model.modified
+
+#Predicting on test set 
+
+```{r}
+gam.prediction = predict(gam.model.modified, testing[c(3,4,6)]) #Predicting on the testing set with the variables we chose earlier in the beginning of the process of #designing models
+mse <- mse(testing$Price_house, gam.prediction) #Calculation of MSE
+gam.tss = mean((testing$Price_house - mean(testing$Price_house))^2) #Used to find the variance   
+test.of.r2 = 1 - mse/gam.tss #Calculating r-square, mean square error over variance.
+test.of.r2  #r-quare 
+```
+
+#Final model accurracy
+
+```{r}
+actual_predictions <- data.frame(cbind(actual=testing$Price_house,preditions=gam.prediction))  #Making a new object and adding the values from actual and preditions.
+correlation_accuracy <- cor(actual_predictions) #Creating a second object and using the function "cor" to find the correlation between the actual values and predicted values. 
+correlation_accuracy
+
+```
+
+Accuraccy of 70.8%
+
+
+
+
+
+
+
+
